@@ -32,22 +32,17 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module fp_class(f, fExp, fSig, isSnan, isQnan, isInfinity, isZero, isSubnormal, isNormal);
+module fp_class(f, fExp, fSig, fFlags);
     parameter NEXP = 5;
     parameter NSIG = 10;
-    parameter BIAS = ((1 << (NEXP - 1)) - 1); // IEEE 754, section 3.3
-    //parameter EMAX = BIAS; // IEEE 754, section 3.3
-    parameter EMIN = (1 - BIAS); // IEEE 754, section 3.3
-                                 // Standard actually says
-				 // "emin = 1 - emax" but emax == bias
-				 // so this is equivalent.
     parameter CLOG2_NSIG = $clog2(NSIG+1);
     input [NEXP+NSIG:0] f;
     output signed [NEXP+1:0] fExp;
     reg signed [NEXP+1:0] fExp;
     output [NSIG:0] fSig;
     reg [NSIG:0] fSig;
-    output isSnan, isQnan, isInfinity, isZero, isSubnormal, isNormal;
+    `include "ieee-754-flags.v"
+    output [LAST_FLAG-1:0] fFlags;
 
     wire expOnes, expZeroes, sigZeroes;
 
@@ -55,12 +50,12 @@ module fp_class(f, fExp, fSig, isSnan, isQnan, isInfinity, isZero, isSubnormal, 
     assign expZeroes = ~|f[NEXP+NSIG-1:NSIG];
     assign sigZeroes = ~|f[NSIG-1:0];
 
-    assign isSnan      =  expOnes   & ~sigZeroes & ~f[NSIG-1];
-    assign isQnan      =  expOnes                &  f[NSIG-1];
-    assign isInfinity  =  expOnes   &  sigZeroes;
-    assign isZero      =  expZeroes &  sigZeroes;
-    assign isSubnormal =  expZeroes & ~sigZeroes;
-    assign isNormal    = ~expOnes   & ~expZeroes;
+    assign fFlags[SNAN]      =  expOnes   & ~sigZeroes & ~f[NSIG-1];
+    assign fFlags[QNAN]      =  expOnes                &  f[NSIG-1];
+    assign fFlags[INFINITY]  =  expOnes   &  sigZeroes;
+    assign fFlags[ZERO]      =  expZeroes &  sigZeroes;
+    assign fFlags[SUBNORMAL] =  expZeroes & ~sigZeroes;
+    assign fFlags[NORMAL]    = ~expOnes   & ~expZeroes;
 
     reg [NSIG:0] mask = ~0;
     reg [CLOG2_NSIG-1:0] sa;
@@ -76,9 +71,9 @@ module fp_class(f, fExp, fSig, isSnan, isQnan, isInfinity, isZero, isSubnormal, 
 
         sa = 0;
 
-        if (isNormal)
+        if (fFlags[NORMAL])
           {fExp, fSig} = {f[NEXP+NSIG-1:NSIG] - BIAS, 1'b1, f[NSIG-1:0]};
-        else if (isSubnormal)
+        else if (fFlags[SUBNORMAL])
           begin
             // Shift the most significant bit into the position
             // of the Normal's implied 1. Keep track of how many

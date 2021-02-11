@@ -19,19 +19,14 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 
-module fp_mul(a, b, p, snan, qnan, infinity, zero, subnormal, normal);
+module fp_mul(a, b, p, pFlags);
   parameter NEXP = 5;
   parameter NSIG = 10;
-  parameter BIAS = (1 << (NEXP-1)) - 1;
-  parameter EMAX = BIAS;
-  parameter EMIN = 1 - EMAX;
   input [NEXP+NSIG:0] a, b;
   output [NEXP+NSIG:0] p;
-  output snan, qnan, infinity, zero, subnormal, normal;
-  reg snan, qnan, infinity, zero, subnormal, normal;
-
-  wire aSnan, aQnan, aInfinity, aZero, aSubnormal, aNormal;
-  wire bSnan, bQnan, bInfinity, bZero, bSubnormal, bNormal;
+  `include "ieee-754-flags.v"
+  output [LAST_FLAG-1:0] pFlags;
+  reg [LAST_FLAG-1:0] pFlags;
 
   wire signed [NEXP+1:0] aExp, bExp;
   reg signed [NEXP+1:0] pExp, t1Exp, t2Exp;
@@ -42,10 +37,12 @@ module fp_mul(a, b, p, snan, qnan, infinity, zero, subnormal, normal);
 
   wire [2*NSIG+1:0] rawSignificand;
 
+  wire [LAST_FLAG-1:0] aFlags, bFlags;
+
   reg pSign;
 
-  fp_class #(NEXP,NSIG) aClass(a, aExp, aSig, aSnan, aQnan, aInfinity, aZero, aSubnormal, aNormal);
-  fp_class #(NEXP,NSIG) bClass(b, bExp, bSig, bSnan, bQnan, bInfinity, bZero, bSubnormal, bNormal);
+  fp_class #(NEXP,NSIG) aClass(a, aExp, aSig, aFlags);
+  fp_class #(NEXP,NSIG) bClass(b, bExp, bSig, bFlags);
 
   assign rawSignificand = aSig * bSig;
 
@@ -56,38 +53,38 @@ module fp_mul(a, b, p, snan, qnan, infinity, zero, subnormal, normal);
     // exclusive OR of the operands' signs".
     pSign = a[NEXP+NSIG] ^ b[NEXP+NSIG];
     pTmp = {pSign, {NEXP{1'b1}}, 1'b0, {NSIG-1{1'b1}}};  // Initialize p to be an sNaN.
-    {snan, qnan, infinity, zero, subnormal, normal} = 6'b000000;
+    pFlags = 6'b000000;
 
-    if ((aSnan | bSnan) == 1'b1)
+    if ((aFlags[SNAN] | bFlags[SNAN]) == 1'b1)
       begin
-        pTmp = aSnan == 1'b1 ? a : b;
-        snan = 1;
+        pTmp = aFlags[SNAN] == 1'b1 ? a : b;
+        pFlags[SNAN] = 1;
       end
-    else if ((aQnan | bQnan) == 1'b1)
+    else if ((aFlags[QNAN] | bFlags[QNAN]) == 1'b1)
       begin
-        pTmp = aQnan == 1'b1 ? a : b;
-        qnan = 1;
+        pTmp = aFlags[QNAN] == 1'b1 ? a : b;
+        pFlags[QNAN] = 1;
       end
-    else if ((aInfinity | bInfinity) == 1'b1)
+    else if ((aFlags[INFINITY] | bFlags[INFINITY]) == 1'b1)
       begin
-        if ((aZero | bZero) == 1'b1)
+        if ((aFlags[ZERO] | bFlags[ZERO]) == 1'b1)
           begin
             pTmp = {pSign, {NEXP{1'b1}}, 1'b1, {NSIG-1{1'b0}}}; // qNaN
-            qnan = 1;
+            pFlags[QNAN] = 1;
           end
         else
           begin
             pTmp = {pSign, {NEXP{1'b1}}, {NSIG{1'b0}}};
-            infinity = 1;
+            pFlags[INFINITY] = 1;
           end
       end
-    else if ((aZero | bZero) == 1'b1 ||
-             (aSubnormal & bSubnormal) == 1'b1)
+    else if ((aFlags[ZERO] | bFlags[ZERO]) == 1'b1 ||
+             (aFlags[SUBNORMAL] & bFlags[SUBNORMAL]) == 1'b1)
       begin
         pTmp = {pSign, {NEXP+NSIG{1'b0}}};
-        zero = 1;
+        pFlags[ZERO] = 1;
       end
-    else // if (((aSubnormal | aNormal) & (bSubnormal | bNormal)) == 1'b1)
+    else // if (((aFlags[SUBNORMAL] | aFlags[NORMAL]) & (bFlags[SUBNORMAL] | bFlags[NORMAL])) == 1'b1)
       begin
         t1Exp = aExp + bExp;
 
@@ -105,19 +102,19 @@ module fp_mul(a, b, p, snan, qnan, infinity, zero, subnormal, normal);
         if (t2Exp < (EMIN - NSIG))  // Too small to even be represented as
           begin                     // a subnormal; round down to zero.
             pTmp = {pSign, {NEXP+NSIG{1'b0}}};
-            zero = 1;
+            pFlags[ZERO] = 1;
           end
         else if (t2Exp < EMIN) // Subnormal
           begin
             pSig = tSig >> (EMIN - t2Exp);
             // Remember that we can only store NSIG bits
             pTmp = {pSign, {NEXP{1'b0}}, pSig[NSIG-1:0]};
-            subnormal = 1;
+            pFlags[SUBNORMAL] = 1;
           end
         else if (t2Exp > EMAX) // Infinity
           begin
             pTmp = {pSign, {NEXP{1'b1}}, {NSIG{1'b0}}};
-            infinity = 1;
+            pFlags[INFINITY] = 1;
           end
         else // Normal
           begin
@@ -127,7 +124,7 @@ module fp_mul(a, b, p, snan, qnan, infinity, zero, subnormal, normal);
             // significant bit is 1 so we only store the least
             // significant NSIG bits in the significand.
             pTmp = {pSign, pExp[NEXP-1:0], pSig[NSIG-1:0]};
-	    normal = 1;
+	    pFlags[NORMAL] = 1;
           end
       end //
   end
